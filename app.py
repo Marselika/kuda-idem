@@ -6,6 +6,8 @@
 """
 
 import csv
+import inspect
+from html import escape
 import json
 import os
 import random
@@ -167,6 +169,26 @@ S = st.session_state
 
 def go(step: int):
     S.step = step
+    S.nudge = None
+
+
+# «Дальше»: если шаг не заполнен (например, поле ввода пустое) — не идём дальше, а мягко подсказываем
+def go_next(step: int):
+    if step_ready(step):
+        go(step + 1)
+    else:
+        S.nudge = step
+
+
+# Аргумент live=True есть только в новых версиях Streamlit. В старых — просто не передаём его,
+# тогда значение фиксируется при Enter / уходе из поля / нажатии «Дальше».
+_TEXT_INPUT_HAS_LIVE = "live" in inspect.signature(st.text_input).parameters
+
+
+def text_input_compat(*args, **kwargs):
+    if _TEXT_INPUT_HAS_LIVE:
+        kwargs["live"] = True
+    return st.text_input(*args, **kwargs)
 
 
 def set_ans(key: str, value):
@@ -174,7 +196,7 @@ def set_ans(key: str, value):
 
 
 def restart():
-    S.step, S.ans, S.submitted, S.saved_ok = 0, {}, False, None
+    S.step, S.ans, S.submitted, S.saved_ok, S.nudge = 0, {}, False, None, None
 
 
 def label_of(options, key):
@@ -227,7 +249,13 @@ def chosen_time() -> str:
     return S.ans.get("time_custom", "") if t == "other" else t
 
 
-# Готов ли шаг (чтобы включить «Дальше»)
+# Выбран ли вариант на шаге (включает кнопку «Дальше»; текст проверяется при нажатии)
+def choice_made(step: int) -> bool:
+    a = S.ans
+    return {2: "dish" in a, 3: "dream" in a}.get(step, step_ready(step))
+
+
+# Полностью ли заполнен шаг
 def step_ready(step: int) -> bool:
     a = S.ans
     if step == 1:
@@ -384,7 +412,6 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {{
 @keyframes wiggle  {{ 0%,100% {{transform:translateX(-50%) rotate(0);}} 25% {{transform:translateX(-50%) rotate(-8deg);}} 75% {{transform:translateX(-50%) rotate(8deg);}} }}
 @keyframes jump    {{ 0%,100% {{transform:translateY(0);}} 40% {{transform:translateY(-22px);}} }}
 @keyframes fall    {{ from {{transform:translateY(-12vh) rotate(0);}} to {{transform:translateY(112vh) rotate(360deg);}} }}
-@keyframes peek    {{ 0%,72%,100% {{transform:translateY(100%);}} 78%,92% {{transform:translateY(28%);}} }}
 
 .fade {{ animation:fadeUp .55s ease both; }}
 .cat-wrap {{ display:flex; flex-direction:column; align-items:center; margin:.1rem 0 .3rem; }}
@@ -431,6 +458,11 @@ div[class*="st-key-main_"] button:disabled {{ opacity:.45; filter:grayscale(.3);
 div[class*="st-key-back_"] button {{ background:transparent !important; border:none !important; color:{c["muted"]} !important; min-height:56px; }}
 div[class*="st-key-back_"] button:hover {{ color:{c["accent"]} !important; }}
 
+/* 2 колонки и на телефоне */
+div[class*="st-key-grid_"] [data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; flex-direction:row !important; gap:.6rem !important; }}
+div[class*="st-key-grid_"] [data-testid="stColumn"] {{ min-width:0 !important; }}
+div[class*="st-key-grid_"] {{ gap:.6rem !important; }}
+
 /* убегающая «Нет» */
 .no-zone {{ display:flex; justify-content:center; min-height:64px; margin-top:.5rem; }}
 #no-btn {{ font-family:'Nunito',sans-serif; font-weight:600; font-size:1rem; color:{c["text"]}; background:{c["card"]};
@@ -441,9 +473,9 @@ div[class*="st-key-back_"] button:hover {{ color:{c["accent"]} !important; }}
 /* поля ввода */
 [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea, [data-testid="stTimeInput"] input {{
   font-family:'Nunito',sans-serif !important; font-size:1rem !important; color:{c["text"]} !important; background:{c["card"]} !important; }}
-[data-testid="stTextInputRootElement"], [data-testid="stTextArea"] div[data-baseweb], [data-testid="stTimeInput"] div[data-baseweb] {{
+[data-testid="stTextInputRootElement"], [data-testid="stTextAreaRootElement"], [data-testid="stTimeInput"] div[data-baseweb="select"] > div {{
   border-radius:18px !important; border:2px solid {c["pink_soft"]} !important; background:{c["card"]} !important; overflow:hidden; }}
-[data-testid="stTextInputRootElement"]:focus-within, [data-testid="stTextArea"] div[data-baseweb]:focus-within {{ border-color:{c["accent"]} !important; }}
+[data-testid="stTextInputRootElement"]:focus-within, [data-testid="stTextAreaRootElement"]:focus-within {{ border-color:{c["accent"]} !important; }}
 [data-testid="stWidgetLabel"] p {{ font-weight:700 !important; color:{c["text"]} !important; }}
 
 /* таблетки (дни, время) */
@@ -467,11 +499,22 @@ div[class*="st-key-back_"] button:hover {{ color:{c["accent"]} !important; }}
 .summary b {{ color:{c["muted"]}; font-weight:700; }}
 .ps {{ text-align:center; font-size:.88rem; color:{c["muted"]}; font-style:italic; margin:.6rem 0 1.2rem; }}
 
+/* самолётик и котик-преследователь */
+@keyframes hop {{ 0%,100% {{transform:translateY(0);}} 50% {{transform:translateY(-26px);}} }}
+.plane {{ position:fixed; left:0; top:0; z-index:9990; cursor:pointer; filter:drop-shadow(0 6px 8px rgba(120,90,140,.25)); }}
+.plane.caught {{ animation:pop .4s reverse forwards; }}
+.chaser {{ position:fixed; left:0; bottom:6px; z-index:9989; pointer-events:none; }}
+.chaser > svg {{ display:block; }}
+.chaser > div {{ animation:hop .45s ease-in-out infinite; }}
+
 /* дождь из котиков, подглядывающий котик, пасхалки */
 .rain {{ position:fixed; inset:0; pointer-events:none; z-index:9999; overflow:hidden; }}
 .rain span {{ position:absolute; top:0; font-size:2rem; animation:fall linear forwards; }}
-.peek {{ position:fixed; left:18px; bottom:0; width:96px; z-index:50; animation:peek 14s ease-in-out 3s infinite; transform:translateY(100%); cursor:pointer; }}
-.peek:hover {{ animation-play-state:paused; transform:translateY(100%) !important; transition:transform .25s; }}
+.peek {{ position:fixed; left:18px; bottom:0; width:96px; z-index:50; cursor:pointer; line-height:0;
+  transform:translateY(105%); transition:transform .55s cubic-bezier(.3,1.4,.5,1); }}
+.peek.up {{ transform:translateY(30%); }}
+.peek svg {{ width:100%; height:auto; }}
+.peek.up:hover {{ transform:translateY(18%); }}
 .paw-mark {{ position:fixed; pointer-events:none; z-index:9998; font-size:18px; animation:fadeUp .2s reverse, sparkle 1.2s ease forwards; }}
 .bubble {{ position:fixed; z-index:9999; pointer-events:none; background:#fff; border:2px solid {c["pink"]}; color:{c["text"]};
   border-radius:16px; padding:.35rem .75rem; font:700 .9rem 'Nunito',sans-serif; box-shadow:0 8px 20px rgba(190,140,190,.25);
@@ -482,7 +525,9 @@ div[class*="st-key-back_"] button:hover {{ color:{c["accent"]} !important; }}
 @media (max-width:640px) {{
   .block-container {{ padding:1.1rem .9rem 4rem !important; }}
   .h1 {{ font-size:1.65rem; }} .h2 {{ font-size:1.2rem; }} .result-big {{ font-size:1.3rem; }}
-  div[class*="st-key-opt_"] button {{ min-height:52px; }}
+  div[class*="st-key-opt_"] button {{ min-height:58px; padding:.55rem .6rem !important; }}
+  div[class*="st-key-opt_"] button p {{ font-size:.92rem !important; line-height:1.25 !important; }}
+  div[class*="st-key-opt_"] button[kind="primary"] p::after {{ content:""; }}
   .peek {{ width:72px; left:10px; }}
   .stApp::before, .stApp::after {{ font-size:32px; }}
 }}
@@ -575,6 +620,66 @@ JS = r"""
   doc.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('#no-btn'); if (b) flee(b, e); }, true);
   doc.addEventListener('focusin', (e) => { if (e.target.id === 'no-btn') e.target.blur(); }, true);
 
+  // ✈️ иногда пролетает бумажный самолётик, а котик бежит за ним
+  const PLANE = '\x3csvg viewBox="0 0 64 40" width="58" height="36">\x3cpath d="M2 20 L62 4 L40 36 L30 24 Z" fill="#fff" stroke="#4A3B52" stroke-width="2.5" stroke-linejoin="round"/>\x3cpath d="M62 4 L30 24 L26 34 L22 22 Z" fill="#C9B6F2" stroke="#4A3B52" stroke-width="2.5" stroke-linejoin="round"/>\x3c/svg>';
+  const CHASER = '__CHASER_SVG__';
+  let flying = false, caught = 0;
+  function flyPlane() {
+    if (flying || document.hidden) return;
+    flying = true;
+    peek.classList.remove('up');
+    const ltr = Math.random() < 0.5, W = innerWidth, H = innerHeight;
+    const plane = doc.createElement('div'); plane.className = 'plane'; plane.innerHTML = PLANE;
+    const cat = doc.createElement('div'); cat.className = 'chaser'; cat.innerHTML = '\x3cdiv>' + CHASER + '\x3c/div>';
+    doc.body.appendChild(plane); doc.body.appendChild(cat);
+    const baseY = H * (0.12 + Math.random() * 0.25), amp = 18 + Math.random() * 22;
+    const dur = 7000 + Math.random() * 3000, lag = 900, t0 = performance.now();
+    const xAt = (t) => { const k = t / dur; return ltr ? -90 + k * (W + 180) : W + 90 - k * (W + 180); };
+    let done = false;
+    plane.addEventListener('click', (e) => {          // пасхалка: поймай самолётик сама
+      e.stopPropagation(); if (done) return; done = true; caught++;
+      plane.classList.add('caught');
+      bubble(e.clientX, e.clientY, caught > 2 ? 'Ты ловишь их лучше котика 😹' : 'Поймала! Котик в шоке 🙀');
+      rain(18);
+    });
+    function frame(now) {
+      const t = now - t0;
+      if (!done) {
+        const x = xAt(t), y = baseY + Math.sin(t / 380) * amp;
+        const tilt = Math.cos(t / 380) * 14 * (ltr ? 1 : -1);
+        plane.style.transform = `translate(${x}px, ${y}px) scaleX(${ltr ? 1 : -1}) rotate(${tilt}deg)`;
+      }
+      const cx = xAt(Math.max(0, t - lag));
+      cat.style.transform = `translateX(${cx - 32}px)`;
+      cat.firstElementChild.firstElementChild.style.transform = `scaleX(${ltr ? 1 : -1}) rotate(${ltr ? 12 : -12}deg)`;
+      if (t < dur + lag + 200) requestAnimationFrame(frame);
+      else { plane.remove(); cat.remove(); flying = false; }
+    }
+    requestAnimationFrame(frame);
+  }
+  window.flyPlane = flyPlane;
+  setTimeout(function loop() { flyPlane(); setTimeout(loop, 25000 + Math.random() * 20000); }, 9000);
+
+  // 🐱 котик выглядывает из левого нижнего угла
+  const PEEK_SVG = '__PEEK_SVG__';
+  const peek = doc.createElement('div'); peek.className = 'peek'; peek.innerHTML = PEEK_SVG;
+  doc.body.appendChild(peek);
+  let hideTimer = null;
+  function peekUp(ms) {
+    peek.classList.add('up');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      if (peek.matches(':hover')) return peekUp(1500);      // пока мышка на котике — не прячется
+      peek.classList.remove('up');
+    }, ms);
+  }
+  peek.addEventListener('click', () => peekUp(3500));      // после клика задерживается подольше
+  setTimeout(function loop() {
+    const finale = !!doc.querySelector('.cat-row');          // на финальном экране котиков и так много
+    if (!flying && !finale && !document.hidden) peekUp(4500);
+    setTimeout(loop, 11000 + Math.random() * 9000);
+  }, 3500);
+
   // кнопка «Нет» с position:fixed не должна остаться висеть после смены экрана
   new MutationObserver(() => { if (!doc.getElementById('no-btn')) escapes = 0; })
     .observe(doc.body, {childList: true, subtree: true});
@@ -614,24 +719,29 @@ def progress_bar(step: int):
 
 
 def option_grid(q_name: str, options, selected_key, on_pick=set_ans):
-    for row in range(0, len(options), 2):
-        cols = st.columns(2, gap="small")
-        for j, (k, e, text, *_) in enumerate(options[row:row + 2]):
-            with cols[j]:
-                st.button(f"{e}  {text}", key=f"opt_{q_name}_{k}",
-                          type="primary" if selected_key == k else "secondary",
-                          on_click=on_pick, args=(q_name, k), width="stretch")
+    # контейнер с key → CSS держит 2 колонки даже на телефоне
+    with st.container(key=f"grid_{q_name}"):
+        for row in range(0, len(options), 2):
+            cols = st.columns(2, gap="small")
+            for j, (k, e, text, *_) in enumerate(options[row:row + 2]):
+                with cols[j]:
+                    st.button(f"{e}  {text}".strip(), key=f"opt_{q_name}_{row + j}",
+                              type="primary" if selected_key == k else "secondary",
+                              on_click=on_pick, args=(q_name, k), width="stretch")
 
 
 def nav(step: int, next_label="Дальше →", back=True):
     st.write("")
-    b, n = st.columns([1, 2.2], gap="small")
+    with st.container(key=f"grid_nav_{step}"):
+        b, n = st.columns([1, 2.2], gap="small")
     with b:
         if back:
             st.button("← Назад", key=f"back_{step}", on_click=go, args=(step - 1,), width="stretch")
     with n:
-        st.button(next_label, key=f"main_next_{step}", on_click=go, args=(step + 1,),
-                  disabled=not step_ready(step), width="stretch")
+        st.button(next_label, key=f"main_next_{step}", on_click=go_next, args=(step,),
+                  disabled=not choice_made(step), width="stretch")
+    if S.get("nudge") == step:
+        html('<div class="reaction">Котик ждёт ответ в поле ✍️🐾</div>')
 
 
 def reaction(text: str):
@@ -678,8 +788,8 @@ def screen_q2():
     sel = S.ans.get("dish")
     option_grid("dish", options, sel)
     if sel == CUSTOM:
-        val = st.text_input("Что это будет?", value=S.ans.get("dish_custom", ""), key="w_dish_custom",
-                            placeholder="Например: сырники, том ям, мамина паста…", max_chars=80, live=True)
+        val = text_input_compat("Что это будет?", value=S.ans.get("dish_custom", ""), key="w_dish_custom",
+                            placeholder="Например: сырники, том ям, мамина паста…", max_chars=80)
         S.ans["dish_custom"] = val
         reaction(text_egg(val) or ("Котик записывает… ✍️" if val.strip() else ""))
     else:
@@ -694,8 +804,8 @@ def screen_q3():
     sel = S.ans.get("dream")
     option_grid("dream", Q3_OPTIONS, sel)
     if sel == "yes":
-        val = st.text_input("Как называется это место?", value=S.ans.get("dream_text", ""), key="w_dream",
-                            placeholder="Название, адрес или ссылка", max_chars=150, live=True)
+        val = text_input_compat("Как называется это место?", value=S.ans.get("dream_text", ""), key="w_dream",
+                            placeholder="Название, адрес или ссылка", max_chars=150)
         S.ans["dream_text"] = val
         reaction(text_egg(val) or ("Отличный выбор. Котик запомнил 📍" if val.strip() else reaction_of(Q3_OPTIONS, sel)))
     else:
@@ -708,8 +818,8 @@ def screen_q4():
     html('<div class="fade"><div class="h2">Очень серьёзный вопрос 🎀</div>'
          '<div class="muted">Готова доверить мне выбор заведения?</div></div>')
     sel = S.ans.get("trust")
-    for k, e, text, _ in Q4_OPTIONS:
-        st.button(f"{e}  {text}", key=f"opt_trust_{k}", type="primary" if sel == k else "secondary",
+    for i, (k, e, text, _) in enumerate(Q4_OPTIONS):
+        st.button(f"{e}  {text}", key=f"opt_trust_{i}", type="primary" if sel == k else "secondary",
                   on_click=set_ans, args=("trust", k), width="stretch")
     html('<div class="no-zone"><button id="no-btn" type="button">🙅‍♀️  Нет</button></div><div id="no-counter"></div>')
     reaction(reaction_of(Q4_OPTIONS, sel) if sel else "")
@@ -780,8 +890,8 @@ def screen_review():
       <div class="result-big">🗓️ {day_label(d, short=False).capitalize()} в {chosen_time()}</div>
       <div class="summary">
         <div><b>Формат:</b> {label_of(Q1_OPTIONS, a.get("format"))}</div>
-        <div><b>Любимое:</b> {chosen_dish()}</div>
-        <div><b>Место мечты:</b> {dream_txt}</div>
+        <div><b>Любимое:</b> {escape(chosen_dish())}</div>
+        <div><b>Место мечты:</b> {escape(dream_txt)}</div>
         <div><b>Выбор заведения:</b> {label_of(Q4_OPTIONS, a.get("trust"))}</div>
       </div>
     </div>""")
@@ -789,9 +899,10 @@ def screen_review():
                        key="w_comment", max_chars=300, height=90, placeholder="Пожелания, уточнения, или просто «мяу»")
     S.ans["comment"] = val
     st.write("")
-    b, n = st.columns([1, 2.2], gap="small")
+    with st.container(key="grid_nav_7"):
+        b, n = st.columns([1, 2.2], gap="small")
     with b:
-        st.button("← Изменить", key="back_7", on_click=go, args=(6,), width="stretch")
+        st.button("← Назад", key="back_7", on_click=go, args=(6,), width="stretch")
     with n:
         st.button("Отправить котику 📨", key="main_submit", on_click=submit, width="stretch")
 
@@ -799,7 +910,7 @@ def screen_review():
 def screen_thanks():
     a = S.ans
     d = date.fromisoformat(a["day"])
-    html(cat_rain_html(34))
+    html(cat_rain_html(22))
     html("""<div class="sparkles"><span style="left:10%;top:10px">✨</span><span style="left:85%;top:30px;animation-delay:.6s">✨</span>
          <span style="left:22%;top:120px;animation-delay:1.1s">✨</span><span style="left:74%;top:115px;animation-delay:1.5s">✨</span></div>""")
     html(f'<div class="cat-row">{cat_svg("happy", "ginger", None, 96)}{cat_svg("happy", "cream", "hat", 130)}'
@@ -838,16 +949,21 @@ def screen_admin():
 # ═══════════════════════════════════════════════════════════════════
 
 inject_css()
-st.html(JS, unsafe_allow_javascript=True)
 
 admin_pw = get_secret("ADMIN_PASSWORD")
 if admin_pw and st.query_params.get("admin") == admin_pw:
     screen_admin()
     st.stop()
 
-# подглядывающий котик в углу (кроме финала)
-if S.step != 8:
-    html(f'<div class="peek">{cat_svg("looking", "gray", None, 96)}</div>')
+# Внутри <script> не должно быть «<тегов» в строках — некоторые версии Streamlit тогда вырезают весь скрипт
+def _js_str(svg: str) -> str:
+    return svg.replace("<", "\\x3c")
+
+
+st.html(JS.replace("__CHASER_SVG__", _js_str(cat_svg("looking", "ginger", None, 64)))
+          .replace("__PEEK_SVG__", _js_str(cat_svg("looking", "gray", None, 96))),
+        unsafe_allow_javascript=True)
+
 
 # защита от «перепрыгивания»: если предыдущий шаг не готов — вернуть на него
 for s in range(1, min(S.step, 7)):
